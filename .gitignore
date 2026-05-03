@@ -1,0 +1,46 @@
+# --- IDE / editor / OS local state ---------------------------------------
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Claude Code local-only settings --------------------------------------
+.claude/settings.local.json
+.claude/.credentials*
+.claude/cache/
+.claude/logs/
+
+# --- PHP build / dev artifacts --------------------------------------------
+/vendor/
+/dist/
+/build/
+*.phar
+.phpunit.result.cache
+.phpunit.cache/
+.phpcs-cache
+.phpstan-cache/
+phpstan.neon
+phpcs.xml
+phpunit.xml
+composer.lock
+
+# --- Node / front-end (only used at build time, no runtime JS bundling) ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# --- Plugin runtime artifacts (should never be committed) -----------------
+volcan-migration/languages/*.mo
+volcan-migration/src/Vendor/.build/
+wp-content/uploads/volcan-migration/
+*.volcan
+*.sqldump
+
+# --- Misc -----------------------------------------------------------------
+*.log
+.env
+.env.local

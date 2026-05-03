@@ -205,7 +205,7 @@ Como administrador, quiero un log detallado de cada export e import (con timesta
 - **FR-021**: El plugin MUST realizar la subida en modo reanudable, de manera que una desconexión transitoria de hasta 30 segundos no obligue a recomenzar.
 - **FR-022**: El plugin MUST permitir cancelar una subida y, al cancelar, eliminar los fragmentos parciales del Drive.
 - **FR-023**: El plugin MUST verificar antes de iniciar la subida que el espacio disponible en Drive sea suficiente, abortando con mensaje claro en caso contrario.
-- **FR-024**: El plugin MUST mostrar progreso de la subida (porcentaje y velocidad efectiva).
+- **FR-024**: El plugin MUST mostrar progreso de la subida: porcentaje completado y velocidad efectiva de transferencia, expresada en MiB/s con un decimal (ej. `12.4 MiB/s`).
 
 **Listado y gestión en Drive**
 
