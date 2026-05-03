@@ -40,6 +40,9 @@ wp-content/uploads/volcan-migration/
 *.volcan
 *.sqldump
 
+# --- Local Docker dev environment -----------------------------------------
+docker/data/
+
 # --- Misc -----------------------------------------------------------------
 *.log
 .env

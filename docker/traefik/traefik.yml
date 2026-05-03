@@ -1,0 +1,35 @@
+# -----------------------------------------------------------------------------
+# Traefik static configuration.
+#
+# Two entrypoints:
+#   web       — :80 (mapped to host :8080) for *.volcan.localhost virtual hosts
+#   dashboard — :8080 (mapped to host :8081) for the Traefik admin dashboard
+#
+# Provider is Docker; only services that opt in via `traefik.enable=true`
+# labels are exposed.
+# -----------------------------------------------------------------------------
+
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+api:
+  dashboard: true
+  insecure: true
+
+log:
+  level: INFO
+
+accessLog: {}
+
+entryPoints:
+  web:
+    address: ":80"
+  dashboard:
+    address: ":8080"
+
+providers:
+  docker:
+    exposedByDefault: false
+    network: volcan-migration_volcan_net
+    watch: true

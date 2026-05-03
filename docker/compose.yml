@@ -1,0 +1,282 @@
+name: volcan-migration
+
+# -----------------------------------------------------------------------------
+# Volcán Migration — local development environment.
+#
+# Designed for Windows 11 + WSL2 (Ubuntu) + Docker Desktop with the WSL2
+# backend. Laravel Herd on Windows occupies :80 and :443 on the Windows
+# localhost, so Traefik exposes :8080 (web) and :8081 (dashboard) instead.
+# Hostnames use the .localhost TLD (RFC 6761), which evergreen browsers
+# resolve to 127.0.0.1 without touching /etc/hosts.
+# -----------------------------------------------------------------------------
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Reverse proxy. Reads container labels via the Docker socket and routes
+  # *.volcan.localhost virtual hosts to the right service.
+  # ---------------------------------------------------------------------------
+  traefik:
+    image: traefik:v3.1
+    container_name: volcan_traefik
+    restart: unless-stopped
+    command:
+      - --configFile=/etc/traefik/traefik.yml
+    ports:
+      - "${HTTP_PORT:-8080}:80"
+      - "${TRAEFIK_DASHBOARD_PORT:-8081}:8080"
+    volumes:
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - volcan_net
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.traefik-api.rule=Host(`${TRAEFIK_DASHBOARD_DOMAIN}`)
+      - traefik.http.routers.traefik-api.entrypoints=dashboard
+      - traefik.http.routers.traefik-api.service=api@internal
+
+  # ---------------------------------------------------------------------------
+  # Origen — WordPress site that contains the data to migrate.
+  # ---------------------------------------------------------------------------
+  db-origen:
+    image: mariadb:10.11
+    container_name: volcan_db_origen
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${ORIGEN_DB_NAME}
+      MARIADB_USER: ${ORIGEN_DB_USER}
+      MARIADB_PASSWORD: ${ORIGEN_DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${ORIGEN_DB_ROOT_PASSWORD}
+    volumes:
+      - db_origen_data:/var/lib/mysql
+    networks:
+      - volcan_net
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  wp-origen:
+    build:
+      context: ./php
+    image: volcan-migration/wp:dev
+    container_name: volcan_wp_origen
+    restart: unless-stopped
+    depends_on:
+      db-origen:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: db-origen:3306
+      WORDPRESS_DB_NAME: ${ORIGEN_DB_NAME}
+      WORDPRESS_DB_USER: ${ORIGEN_DB_USER}
+      WORDPRESS_DB_PASSWORD: ${ORIGEN_DB_PASSWORD}
+      WORDPRESS_DEBUG: 1
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_DEBUG_LOG', true);
+        define('WP_DEBUG_DISPLAY', false);
+        define('WP_HOME', 'http://${ORIGEN_DOMAIN}:${HTTP_PORT}');
+        define('WP_SITEURL', 'http://${ORIGEN_DOMAIN}:${HTTP_PORT}');
+        define('FS_METHOD', 'direct');
+      ENABLE_MULTISITE_ORIGEN: ${ENABLE_MULTISITE_ORIGEN}
+      XDEBUG_MODE: ${XDEBUG_MODE}
+      XDEBUG_CLIENT_HOST: ${XDEBUG_CLIENT_HOST}
+      XDEBUG_CLIENT_PORT: ${XDEBUG_CLIENT_PORT}
+    volumes:
+      - wp_origen_core:/var/www/html
+      - ../:/var/www/html/wp-content/plugins/volcan-migration:rw
+      - ./php/mu-plugins:/var/www/html/wp-content/mu-plugins:ro
+      - uploads_origen:/var/www/html/wp-content/uploads
+      - ./php/php.ini:/usr/local/etc/php/conf.d/zz-volcan.ini:ro
+      - ./php/xdebug.ini:/usr/local/etc/php/conf.d/zz-xdebug.ini:ro
+    networks:
+      - volcan_net
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost/wp-login.php"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.wp-origen.rule=Host(`${ORIGEN_DOMAIN}`)
+      - traefik.http.routers.wp-origen.entrypoints=web
+      - traefik.http.services.wp-origen.loadbalancer.server.port=80
+
+  # ---------------------------------------------------------------------------
+  # Destino — clean WordPress site that receives the migration.
+  # ---------------------------------------------------------------------------
+  db-destino:
+    image: mariadb:10.11
+    container_name: volcan_db_destino
+    restart: unless-stopped
+    environment:
+      MARIADB_DATABASE: ${DESTINO_DB_NAME}
+      MARIADB_USER: ${DESTINO_DB_USER}
+      MARIADB_PASSWORD: ${DESTINO_DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DESTINO_DB_ROOT_PASSWORD}
+    volumes:
+      - db_destino_data:/var/lib/mysql
+    networks:
+      - volcan_net
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  wp-destino:
+    build:
+      context: ./php
+    image: volcan-migration/wp:dev
+    container_name: volcan_wp_destino
+    restart: unless-stopped
+    depends_on:
+      db-destino:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: db-destino:3306
+      WORDPRESS_DB_NAME: ${DESTINO_DB_NAME}
+      WORDPRESS_DB_USER: ${DESTINO_DB_USER}
+      WORDPRESS_DB_PASSWORD: ${DESTINO_DB_PASSWORD}
+      WORDPRESS_DEBUG: 1
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_DEBUG_LOG', true);
+        define('WP_DEBUG_DISPLAY', false);
+        define('WP_HOME', 'http://${DESTINO_DOMAIN}:${HTTP_PORT}');
+        define('WP_SITEURL', 'http://${DESTINO_DOMAIN}:${HTTP_PORT}');
+        define('FS_METHOD', 'direct');
+      XDEBUG_MODE: ${XDEBUG_MODE}
+      XDEBUG_CLIENT_HOST: ${XDEBUG_CLIENT_HOST}
+      XDEBUG_CLIENT_PORT: ${XDEBUG_CLIENT_PORT}
+    volumes:
+      - wp_destino_core:/var/www/html
+      - ../:/var/www/html/wp-content/plugins/volcan-migration:rw
+      - ./php/mu-plugins:/var/www/html/wp-content/mu-plugins:ro
+      - uploads_destino:/var/www/html/wp-content/uploads
+      - ./php/php.ini:/usr/local/etc/php/conf.d/zz-volcan.ini:ro
+      - ./php/xdebug.ini:/usr/local/etc/php/conf.d/zz-xdebug.ini:ro
+    networks:
+      - volcan_net
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://localhost/wp-login.php"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.wp-destino.rule=Host(`${DESTINO_DOMAIN}`)
+      - traefik.http.routers.wp-destino.entrypoints=web
+      - traefik.http.services.wp-destino.loadbalancer.server.port=80
+
+  # ---------------------------------------------------------------------------
+  # phpMyAdmin — connects to either DB. PMA_HOSTS lets the user pick at login.
+  # ---------------------------------------------------------------------------
+  phpmyadmin:
+    image: phpmyadmin:5
+    container_name: volcan_pma
+    restart: unless-stopped
+    environment:
+      PMA_HOSTS: db-origen,db-destino
+      PMA_PORTS: 3306,3306
+      PMA_ARBITRARY: 0
+      UPLOAD_LIMIT: 5G
+    networks:
+      - volcan_net
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.pma.rule=Host(`${PMA_DOMAIN}`)
+      - traefik.http.routers.pma.entrypoints=web
+      - traefik.http.services.pma.loadbalancer.server.port=80
+
+  # ---------------------------------------------------------------------------
+  # Mailpit — captures every wp_mail() call. The mu-plugin redirects PHPMailer
+  # at port 1025 on the internal network.
+  # ---------------------------------------------------------------------------
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: volcan_mailpit
+    restart: unless-stopped
+    environment:
+      MP_MAX_MESSAGES: 5000
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    networks:
+      - volcan_net
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.mail.rule=Host(`${MAIL_DOMAIN}`)
+      - traefik.http.routers.mail.entrypoints=web
+      - traefik.http.services.mail.loadbalancer.server.port=8025
+
+  # ---------------------------------------------------------------------------
+  # WP-CLI — ephemeral containers behind the `cli` profile. Use the wp-origen.sh
+  # and wp-destino.sh wrappers; they call `docker compose run --rm` for you.
+  # ---------------------------------------------------------------------------
+  wpcli-origen:
+    image: wordpress:cli-php8.2
+    container_name: volcan_wpcli_origen
+    profiles: ["cli"]
+    user: "33:33"
+    depends_on:
+      db-origen:
+        condition: service_healthy
+      wp-origen:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: db-origen:3306
+      WORDPRESS_DB_NAME: ${ORIGEN_DB_NAME}
+      WORDPRESS_DB_USER: ${ORIGEN_DB_USER}
+      WORDPRESS_DB_PASSWORD: ${ORIGEN_DB_PASSWORD}
+    volumes:
+      - wp_origen_core:/var/www/html
+      - ../:/var/www/html/wp-content/plugins/volcan-migration:rw
+      - uploads_origen:/var/www/html/wp-content/uploads
+    networks:
+      - volcan_net
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  wpcli-destino:
+    image: wordpress:cli-php8.2
+    container_name: volcan_wpcli_destino
+    profiles: ["cli"]
+    user: "33:33"
+    depends_on:
+      db-destino:
+        condition: service_healthy
+      wp-destino:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: db-destino:3306
+      WORDPRESS_DB_NAME: ${DESTINO_DB_NAME}
+      WORDPRESS_DB_USER: ${DESTINO_DB_USER}
+      WORDPRESS_DB_PASSWORD: ${DESTINO_DB_PASSWORD}
+    volumes:
+      - wp_destino_core:/var/www/html
+      - ../:/var/www/html/wp-content/plugins/volcan-migration:rw
+      - uploads_destino:/var/www/html/wp-content/uploads
+    networks:
+      - volcan_net
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+volumes:
+  db_origen_data:
+  db_destino_data:
+  wp_origen_core:
+  wp_destino_core:
+  uploads_origen:
+  uploads_destino:
+
+networks:
+  volcan_net:
+    driver: bridge
